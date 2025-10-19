@@ -1,5 +1,5 @@
 -- NIKZZ FISH IT - UPGRADED VERSION
--- Dexperienc A
+-- DEVELOPER BY NIKZZ
 -- Updated: 11 Oct 2025 - MAJOR UPDATE
 -- IMPROVED: Auto Enchant, Performance Mode, Auto Rejoin, Telegram Hooked
 
@@ -40,7 +40,12 @@ local Window = Rayfield:CreateWindow({
 local Config = {
     AutoFishingV1 = false,
     AutoFishingV2 = false,
-    FishingDelay = 0.3,
+    FishingDelay = 0.5,
+    CastDelay = 0.15,
+    InstantBait = true,
+    AntiStuck = true,
+    StuckCheckTime = 8,
+    RespawnDelay = 2
     PerfectCatch = false,
     AntiAFK = false,
     AutoJump = false,
@@ -140,6 +145,20 @@ local PurchaseWeather = GetRemote("RF/PurchaseWeatherEvent")
 local UpdateAutoFishing = GetRemote("RF/UpdateAutoFishingState")
 local AwaitTradeResponse = GetRemote("RF/AwaitTradeResponse")
 local FishCaught = GetRemote("RE/FishCaught")
+
+-- Fishing Controller
+local FishingController
+local BaitSpawnedEvent
+local OnCooldownEvent
+
+for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
+    if obj.Name == "FishingController" then
+        FishingController = obj
+        BaitSpawnedEvent = obj:FindFirstChild("BaitSpawned")
+        OnCooldownEvent = obj:FindFirstChild("OnCooldown")
+        break
+    end
+end
 
 -- Auto Save/Load System
 local SaveFileName = "NikzzFishItSettings_" .. LocalPlayer.UserId .. ".json"
@@ -834,320 +853,270 @@ local function PerformanceMode()
     })
 end
 
--- ===== ANTI-STUCK SYSTEM FOR AUTO FISHING V1 =====
-local LastFishTime = tick()
-local StuckCheckInterval = 15
+-- Variables
+local FishingActive = false
+local TotalCycles = 0
+local LastBaitTime = 0
+local LastSuccessfulCycle = tick()
+local StuckDetectionEnabled = false
+local IsRespawning = false
+local IsCasting = false  -- NEW: Flag untuk prevent double cast
+local LastCastTime = 0   -- NEW: Track waktu cast terakhir
 
-local function CheckAndRespawnIfStuck()
-    task.spawn(function()
-        while Config.AutoFishingV1 do
-            task.wait(StuckCheckInterval)
-            
-            if tick() - LastFishTime > StuckCheckInterval and Config.AutoFishingV1 then
-                warn("[Anti-Stuck] Player seems stuck, respawning...")
-                
-                local currentPos = HumanoidRootPart.CFrame
-                Character:BreakJoints()
-                
-                LocalPlayer.CharacterAdded:Wait()
-                task.wait(2)
-                
-                Character = LocalPlayer.Character
-                HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-                Humanoid = Character:WaitForChild("Humanoid")
-                
-                HumanoidRootPart.CFrame = currentPos
-                LastFishTime = tick()
-                
-                task.wait(1)
-                if Config.AutoFishingV1 then
-                    AutoFishingV1()
-                end
-            end
+-- ===== BAIT SPAWN DETECTION =====
+if BaitSpawnedEvent then
+    BaitSpawnedEvent.OnClientEvent:Connect(function(player, baitType, x, y, z)
+        if player == LocalPlayer then
+            LastBaitTime = tick()
+            print("[🪱] Bait spawned: " .. tostring(baitType))
         end
     end)
 end
 
--- ===== AUTO FISHING V1 (COMPLETELY FIXED) =====
--- Tambahkan/ubah beberapa Config sesuai kebutuhan:
-Config = Config or {}
-Config.AutoFishingV1 = Config.AutoFishingV1 or true
-Config.FishingDelay = Config.FishingDelay or 0.25           -- delay antara start dan finish (bisa dipercepat)
-Config.EquipWait = Config.EquipWait or 0.10              -- tunggu setelah equip agar tidak double action
-Config.CastGuardTime = Config.CastGuardTime or 0.25      -- waktu guard untuk mencegah double cast (detik)
-Config.StuckRespawnDelay = Config.StuckRespawnDelay or 7 -- jeda setelah stuck/respawn sebelum mulai memancing lagi
-Config.StuckCheckInterval = Config.StuckCheckInterval or 3
-
-local FishingActive = false
-local MaxRetries = 5
-local CurrentRetries = 0
-local LastFishTime = tick()
-local LastCastTime = 0            -- untuk mencegah double cast
-local SuppressFishingUntil = 0    -- waktu hingga tidak boleh mulai cycle (set saat respawn/stuck)
-local FishingSession = 0          -- session id untuk membatalkan loops lama
-
-local function ResetFishingState()
-    FishingActive = false
-    CurrentRetries = 0
-    LastFishTime = tick()
+-- ===== COOLDOWN DETECTION =====
+if OnCooldownEvent then
+    OnCooldownEvent.OnClientEvent:Connect(function(cooldownData)
+        print("[⏱️] Cooldown detected")
+    end)
 end
 
+-- ===== SAFE RESPAWN WITH PROPER DELAY =====
 local function SafeRespawn()
-    -- menambah session sehingga thread lama berhenti
-    FishingSession = FishingSession + 1
-    local mySession = FishingSession
-
-    -- set jeda supaya tidak langsung start memancing kembali
-    SuppressFishingUntil = math.max(SuppressFishingUntil, tick() + Config.StuckRespawnDelay)
-
+    if IsRespawning then 
+        print("[⚠️] Already respawning, skipping...")
+        return 
+    end
+    
+    IsRespawning = true
+    FishingActive = false
+    IsCasting = false
+    
     task.spawn(function()
-        -- small guard: jika session berubah sebelum eksekusi, abort
-        if mySession ~= FishingSession then return end
-
-        warn("[Anti-Stuck] Respawning to fix stuck state...")
-        -- hentikan aktivitas sementara
-        FishingActive = false
-
-        -- simulasikan respawn / break joints
-        if Character and Character.Destroy then
-            pcall(function() Character:BreakJoints() end)
-        else
-            pcall(function() Character:BreakJoints() end)
-        end
-
-        -- tunggu karakter baru
+        local currentPos = HumanoidRootPart.CFrame
+        
+        print("[🔄] Respawning to fix stuck state...")
+        
+        -- Respawn character
+        Character:BreakJoints()
+        
         local newChar = LocalPlayer.CharacterAdded:Wait()
         task.wait(2)
-
-        -- abort jika session berubah
-        if mySession ~= FishingSession then return end
-
+        
         Character = newChar
         HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
         Humanoid = Character:WaitForChild("Humanoid")
-
+        
         task.wait(0.5)
-        -- pindahkan posisi kembali ke posisi sebelum respawn jika perlu (opsional)
-        -- HumanoidRootPart.CFrame = currentPos -- hanya jika currentPos disimpan
-
-        task.wait(1)
-        ResetFishingState()
-
-        -- jangan langsung start — respect SuppressFishingUntil
-        if Config.AutoFishingV1 and mySession == FishingSession then
-            task.spawn(function()
-                -- tunggu sampai jeda respawn selesai (atau sampai user matikan)
-                while Config.AutoFishingV1 and tick() < SuppressFishingUntil do
-                    task.wait(0.1)
-                end
-                -- jika session masih valid dan auto on, restart
-                if Config.AutoFishingV1 and mySession == FishingSession then
-                    AutoFishingV1()
-                end
-            end)
+        
+        -- Teleport back
+        HumanoidRootPart.CFrame = currentPos
+        
+        print("[✅] Respawn complete, waiting " .. Config.RespawnDelay .. " seconds before fishing...")
+        
+        -- WAIT 3 SECONDS BEFORE STARTING FISHING AGAIN
+        task.wait(Config.RespawnDelay)
+        
+        -- Reset states
+        LastSuccessfulCycle = tick()
+        IsRespawning = false
+        IsCasting = false
+        
+        -- Auto restart fishing if enabled
+        if Config.AutoFishingV1 then
+            print("[🎣] Restarting fishing after respawn delay...")
+            UltraFastFishingV1()
         end
     end)
 end
 
-local function CheckStuckState()
+-- ===== ANTI-STUCK SYSTEM (IMPROVED) =====
+local function AntiStuckSystem()
     task.spawn(function()
-        local mySession = FishingSession
-        while Config.AutoFishingV1 and mySession == FishingSession do
-            task.wait(Config.StuckCheckInterval)
-            -- abort jika session berubah
-            if mySession ~= FishingSession then break end
-
-            local timeSinceLastFish = tick() - LastFishTime
-            if timeSinceLastFish > Config.StuckCheckInterval and Config.AutoFishingV1 and FishingActive then
-                warn("[Anti-Stuck] Detected stuck state! Time since last fish: " .. math.floor(timeSinceLastFish) .. "s")
-                -- set jeda agar tidak spam memancing setelah respawn
-                SuppressFishingUntil = math.max(SuppressFishingUntil, tick() + Config.StuckRespawnDelay)
-                SafeRespawn()
-                break
+        StuckDetectionEnabled = true
+        
+        while StuckDetectionEnabled and Config.AntiStuck do
+            task.wait(1)
+            
+            -- Don't check if respawning
+            if IsRespawning then
+                continue
             end
-        end
-    end)
-end
-
-function AutoFishingV1()
-    -- increment session agar thread lama dibatalkan
-    FishingSession = FishingSession + 1
-    local mySession = FishingSession
-
-    task.spawn(function()
-        print("[AutoFishingV1] Started - Ultra Fast Mode with Anti-Stuck (session "..tostring(mySession)..")")
-        CheckStuckState()
-
-        while Config.AutoFishingV1 and mySession == FishingSession do
-            -- respect suppression window (mis. setelah respawn / stuck)
-            if tick() < SuppressFishingUntil then
-                -- tunggu sampai masa suppression berakhir
-                while tick() < SuppressFishingUntil and Config.AutoFishingV1 and mySession == FishingSession do
-                    task.wait(0.05)
-                end
-                -- double-check session
-                if mySession ~= FishingSession then break end
-            end
-
-            FishingActive = true
-            local cycleSuccess = false
-
-            local success, err = pcall(function()
-                -- if session changed, abort
-                if mySession ~= FishingSession then return end
-
-                -- Validate character
-                if not LocalPlayer.Character or not HumanoidRootPart then
-                    repeat task.wait(0.1) until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                    Character = LocalPlayer.Character
-                    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-                end
-
-                -- Step 1: Equip tool (safe equip + wait for tool to appear)
-                local equipSuccess = false
-                do
-                    local ok, _ = pcall(function()
-                        EquipTool:FireServer(1)
+            
+            if Config.AutoFishingV1 and FishingActive then
+                local timeSinceLastCycle = tick() - LastSuccessfulCycle
+                
+                if timeSinceLastCycle > Config.StuckCheckTime then
+                    print("[⚠️] STUCK DETECTED! Time: " .. math.floor(timeSinceLastCycle) .. "s")
+                    
+                    -- Try to force finish first
+                    pcall(function()
+                        FinishFish:FireServer()
                     end)
-                    if ok then
-                        -- tunggu sampai tool ada di character (timeout kecil)
-                        local timeout = tick() + 0.6
-                        while tick() < timeout and mySession == FishingSession do
-                            local hasTool = false
-                            if Character then
-                                for _,v in pairs(Character:GetChildren()) do
-                                    if v:IsA("Tool") then hasTool = true; break end
-                                end
-                            end
-                            if hasTool then
-                                equipSuccess = true
-                                break
-                            end
-                            task.wait(0.02)
-                        end
-                    end
-                end
-
-                if not equipSuccess then
-                    CurrentRetries = CurrentRetries + 1
-                    warn("[AutoFishingV1] Equip failed or timeout")
-                    if CurrentRetries >= MaxRetries then
-                        warn("[AutoFishingV1] Too many equip failures, respawning...")
+                    
+                    task.wait(1)
+                    
+                    -- If still stuck, respawn
+                    local stillStuck = (tick() - LastSuccessfulCycle) > (Config.StuckCheckTime - 1)
+                    if stillStuck then
+                        print("[🔄] Force finish failed, initiating respawn...")
                         SafeRespawn()
-                        return
+                    else
+                        print("[✅] Force finish successful!")
+                        LastSuccessfulCycle = tick()
                     end
-                    task.wait(0.1)
+                end
+            end
+        end
+    end)
+end
+
+-- ===== ANTI DOUBLE CAST FUNCTION =====
+local function WaitForCastCooldown()
+    local timeSinceLastCast = tick() - LastCastTime
+    local minCastInterval = 0.5  -- Minimal 0.5 detik antar cast
+    
+    if timeSinceLastCast < minCastInterval then
+        local waitTime = minCastInterval - timeSinceLastCast
+        print("[⏳] Waiting " .. string.format("%.2f", waitTime) .. "s to prevent double cast...")
+        task.wait(waitTime)
+    end
+end
+
+-- ===== ULTRA FAST AUTO FISHING V1 (FULLY FIXED) =====
+function UltraFastFishingV1()
+    task.spawn(function()
+        print("[🎣] Auto Fishing Started - Ultra Fast Mode")
+        
+        -- Start anti-stuck system
+        if Config.AntiStuck then
+            AntiStuckSystem()
+        end
+        
+        while Config.AutoFishingV1 do
+            -- Skip if respawning
+            if IsRespawning then
+                task.wait(1)
+                continue
+            end
+            
+            FishingActive = true
+            
+            local success, err = pcall(function()
+                -- Validate character
+                if not Character or not HumanoidRootPart then
+                    print("[⚠️] Character not found, waiting...")
+                    task.wait(1)
                     return
                 end
-
-                -- small wait after equip to avoid duplicate action
-                task.wait(Config.EquipWait)
-
-                -- Guard terhadap double-cast:
-                if tick() - LastCastTime < Config.CastGuardTime then
-                    -- jika kast baru saja terjadi (mis. karena sync glitch), skip cycle sebentar
-                    warn("[AutoFishingV1] Skipping cycle due to recent cast (guard)")
-                    task.wait(0.05)
+                
+                -- ANTI DOUBLE CAST: Wait before casting
+                WaitForCastCooldown()
+                
+                -- Mark that we're casting
+                IsCasting = true
+                
+                -- STEP 1: EQUIP TOOL
+                local equipSuccess = pcall(function()
+                    EquipTool:FireServer(1)
+                end)
+                
+                if not equipSuccess then
+                    print("[⚠️] Equip failed")
+                    IsCasting = false
+                    task.wait(0.5)
                     return
                 end
+                
+                task.wait(Config.CastDelay)
 
-                -- Step 2: Charge rod
+                -- STEP 2: CHARGE ROD (with retry)
                 local chargeSuccess = false
-                for attempt = 1, 3 do
-                    if mySession ~= FishingSession then break end
+                for attempt = 1, 2 do
                     local ok, result = pcall(function()
                         return ChargeRod:InvokeServer(tick())
                     end)
-                    if ok and result then
+                    if ok and result then 
                         chargeSuccess = true
-                        break
+                        break 
                     end
-                    task.wait(0.05)
+                    task.wait(0.1)
                 end
-
+                
                 if not chargeSuccess then
-                    warn("[AutoFishingV1] Charge failed after 3 attempts")
-                    CurrentRetries = CurrentRetries + 1
-                    if CurrentRetries >= MaxRetries then
-                        SafeRespawn()
-                        return
-                    end
-                    task.wait(0.05)
+                    print("[⚠️] Charge failed")
+                    IsCasting = false
+                    task.wait(0.5)
                     return
                 end
+                
+                task.wait(Config.CastDelay)
 
-                task.wait(0.02)
-
-                -- Step 3: Start minigame with perfect values (cek session)
+                -- STEP 3: START MINIGAME
                 local startSuccess = false
-                for attempt = 1, 3 do
-                    if mySession ~= FishingSession then break end
-                    local ok = false
-                    local result = nil
-                    ok, result = pcall(function()
-                        return StartMini:InvokeServer(-1.233184814453125, 0.9945034885633273)
+                for attempt = 1, 2 do
+                    local ok = pcall(function()
+                        StartMini:InvokeServer(-1.233184814453125, 0.9945034885633273)
                     end)
-                    if ok then
+                    if ok then 
                         startSuccess = true
-                        break
+                        break 
                     end
-                    task.wait(0.03)
+                    task.wait(0.1)
                 end
-
+                
                 if not startSuccess then
-                    warn("[AutoFishingV1] Start minigame failed after 3 attempts")
-                    CurrentRetries = CurrentRetries + 1
-                    if CurrentRetries >= MaxRetries then
-                        SafeRespawn()
-                        return
-                    end
-                    task.wait(0.05)
+                    print("[⚠️] Start minigame failed")
+                    IsCasting = false
+                    task.wait(0.5)
                     return
                 end
-
-                -- Mark last cast time (guard double cast)
+                
+                -- Update last cast time
                 LastCastTime = tick()
 
-                -- Step 4: Wait for fishing delay (bisa diatur lebih cepat)
-                local actualDelay = math.max(Config.FishingDelay or 0.3, 0.05)
-                task.wait(actualDelay)
+                -- STEP 4: FISHING DELAY (RESPECT SLIDER VALUE)
+                local actualDelay = Config.FishingDelay
+                
+                -- Smart delay based on bait detection
+                if Config.InstantBait and LastBaitTime > 0 then
+                    local timeSinceBait = tick() - LastBaitTime
+                    local remainingDelay = math.max(0, actualDelay - timeSinceBait)
+                    if remainingDelay > 0 then
+                        task.wait(remainingDelay)
+                    end
+                else
+                    task.wait(actualDelay)
+                end
 
-                -- Step 5: Finish fishing
+                -- STEP 5: FINISH FISHING
                 local finishSuccess = pcall(function()
                     FinishFish:FireServer()
                 end)
-
+                
                 if finishSuccess then
-                    cycleSuccess = true
-                    LastFishTime = tick()
-                    CurrentRetries = 0
-                    task.wait(0.25)
+                    TotalCycles = TotalCycles + 1
+                    LastSuccessfulCycle = tick()
+                    print("[✅] Cycle #" .. TotalCycles .. " completed")
                 end
-
-                task.wait(0.02)
+                
+                -- Reset casting flag
+                IsCasting = false
+                
+                -- Small delay between cycles
+                task.wait(0.2)
             end)
 
             if not success then
-                warn("[AutoFishingV1] Error in cycle: " .. tostring(err))
-                CurrentRetries = CurrentRetries + 1
-                if CurrentRetries >= MaxRetries then
-                    SafeRespawn()
-                end
-                task.wait(0.2)
-            elseif cycleSuccess then
-                -- Successful cycle, minimal wait
-                task.wait(0.05)
-            else
-                -- Failed cycle but no error
-                task.wait(0.1)
+                print("[❌] Cycle error: " .. tostring(err))
+                IsCasting = false
+                task.wait(1)
             end
         end
-
-        -- jika keluar loop, reset state hanya jika session masih sama
-        if mySession == FishingSession then
-            ResetFishingState()
-            print("[AutoFishingV1] Stopped (session "..tostring(mySession)..")")
-        end
+        
+        FishingActive = false
+        StuckDetectionEnabled = false
+        IsCasting = false
+        print("[🛑] Auto Fishing Stopped - Total Cycles: " .. TotalCycles)
     end)
 end
 
@@ -1691,16 +1660,28 @@ local function CreateUI()
     Tab1:CreateSection("Auto Features")
     
     Tab1:CreateToggle({
-        Name = "Auto Fishing V1 (Ultra Fast)",
+        Name = "Auto Fishing V1 (ULTRA FAST)",
         CurrentValue = false,
         Callback = function(Value)
             Config.AutoFishingV1 = Value
             if Value then
-                Config.AutoFishingV2 = false
-                AutoFishingV1()
-                Rayfield:Notify({Title = "Auto Fishing V1", Content = "Started with Anti-Stuck!", Duration = 3})
+                TotalCycles = 0
+                LastSuccessfulCycle = tick()
+                LastCastTime = 0
+                IsCasting = false
+                UltraFastFishingV1()
+                Rayfield:Notify({
+                    Title = "🎣 AUTO FISHING STARTED",
+                    Content = "Fixed Double Cast & Anti-Stuck!",
+                    Duration = 3
+                })
+            else
+                Rayfield:Notify({
+                    Title = "🎣 AUTO FISHING STOPPED", 
+                    Content = "Total Cycles: " .. TotalCycles,
+                    Duration = 3
+                })
             end
-            SaveSettings()
         end
     })
     
@@ -1719,13 +1700,35 @@ local function CreateUI()
     })
     
     Tab1:CreateSlider({
-        Name = "Fishing Delay (V1 Only)",
-        Range = {0.1, 5},
+        Name = "Fishing Delay (Only V1)",
+        Range = {0.3, 2},
         Increment = 0.1,
-        CurrentValue = 0.3,
+        Suffix = " seconds",
+        CurrentValue = Config.FishingDelay,
         Callback = function(Value)
             Config.FishingDelay = Value
-            SaveSettings()
+            Rayfield:Notify({
+                Title = "⏱️ Fishing Delay",
+                Content = "Set to: " .. Value .. "s",
+                Duration = 2
+            })
+        end
+    })
+    
+    -- Cast Delay Slider
+    FishingTab:CreateSlider({
+        Name = "Cast Delay (Only V1)",
+        Range = {0.1, 0.5},
+        Increment = 0.05,
+        Suffix = " seconds",
+        CurrentValue = Config.CastDelay,
+        Callback = function(Value)
+            Config.CastDelay = Value
+            Rayfield:Notify({
+                Title = "🎯 Cast Delay", 
+                Content = "Set to: " .. Value .. "s",
+                Duration = 2
+            })
         end
     })
     
@@ -1798,6 +1801,24 @@ local function CreateUI()
         end
     })
     
+    -- Instant Bait Toggle
+    FishingTab:CreateToggle({
+        Name = "⚡ Instant Bait Detection",
+        CurrentValue = Config.InstantBait,
+        Callback = function(Value)
+            Config.InstantBait = Value
+        end
+    })
+    
+    -- Anti-Stuck Toggle
+    FishingTab:CreateToggle({
+        Name = "🛡️ Anti-Stuck System",
+        CurrentValue = Config.AntiStuck,
+        Callback = function(Value)
+            Config.AntiStuck = Value
+        end
+    })
+    
     Tab1:CreateSection("Auto Enchant")
     
     Tab1:CreateToggle({
@@ -1847,6 +1868,91 @@ local function CreateUI()
         Callback = function(Value)
             Config.AutoJumpDelay = Value
             SaveSettings()
+        end
+    })
+    
+    -- Stuck Check Time Slider
+    FishingTab:CreateSlider({
+        Name = "⏰ Stuck Check Time",
+        Range = {5, 15},
+        Increment = 1,
+        Suffix = " seconds",
+        CurrentValue = Config.StuckCheckTime,
+        Callback = function(Value)
+            Config.StuckCheckTime = Value
+        end
+    })
+    
+    -- Respawn Delay Slider (NEW)
+    FishingTab:CreateSlider({
+        Name = "🔄 Respawn Delay",
+        Range = {2, 5},
+        Increment = 0.5,
+        Suffix = " seconds",
+        CurrentValue = Config.RespawnDelay,
+        Callback = function(Value)
+            Config.RespawnDelay = Value
+            Rayfield:Notify({
+                Title = "🔄 Respawn Delay",
+                Content = "Wait " .. Value .. "s after respawn",
+                Duration = 2
+            })
+        end
+    })
+    
+    Tab1:CreateSection("Preset Fishing")
+    
+    -- Ultra Fast Preset
+    FishingTab:CreateButton({
+        Name = "⚡ ULTRA FAST PRESET",
+        Callback = function()
+            Config.FishingDelay = 0.3
+            Config.CastDelay = 0.15
+            Config.InstantBait = true
+            Config.AntiStuck = true
+            Config.StuckCheckTime = 8
+            Config.RespawnDelay = 3
+            Rayfield:Notify({
+                Title = "⚡ ULTRA FAST",
+                Content = "Fastest settings applied!",
+                Duration = 3
+            })
+        end
+    })
+    
+    -- Balanced Preset
+    FishingTab:CreateButton({
+        Name = "BALANCED PRESET",
+        Callback = function()
+            Config.FishingDelay = 0.5
+            Config.CastDelay = 0.2
+            Config.InstantBait = true
+            Config.AntiStuck = true
+            Config.StuckCheckTime = 10
+            Config.RespawnDelay = 3
+            Rayfield:Notify({
+                Title = "⚖️ BALANCED",
+                Content = "Balanced settings applied!",
+                Duration = 3
+            })
+        end
+    })
+    
+    -- Safe Preset
+    FishingTab:CreateButton({
+        Name = "SAFE PRESET",
+        Callback = function()
+            Config.FishingDelay = 1.5
+            Config.CastDelay = 1.0
+            Config.InstantBait = true
+            Config.AntiStuck = true
+            Config.StuckCheckTime = 12
+            Config.RespawnDelay = 4
+            Rayfield:Notify({
+                Title = "🛡️ SAFE",
+                Content = "Safe settings applied!",
+                Duration = 3
+            })
         end
     })
     
