@@ -1,5 +1,5 @@
 -- NIKZZ FISH IT - UPGRADED VERSION
--- DEVELOPER BY NIKZZ
+-- Dexperienc A
 -- Updated: 11 Oct 2025 - MAJOR UPDATE
 -- IMPROVED: Auto Enchant, Performance Mode, Auto Rejoin, Telegram Hooked
 
@@ -872,11 +872,11 @@ end
 -- Tambahkan/ubah beberapa Config sesuai kebutuhan:
 Config = Config or {}
 Config.AutoFishingV1 = Config.AutoFishingV1 or true
-Config.FishingDelay = Config.FishingDelay or 0.3           -- delay antara start dan finish (bisa dipercepat)
-Config.EquipWait = Config.EquipWait or 0.08              -- tunggu setelah equip agar tidak double action
+Config.FishingDelay = Config.FishingDelay or 0.25           -- delay antara start dan finish (bisa dipercepat)
+Config.EquipWait = Config.EquipWait or 0.10              -- tunggu setelah equip agar tidak double action
 Config.CastGuardTime = Config.CastGuardTime or 0.25      -- waktu guard untuk mencegah double cast (detik)
-Config.StuckRespawnDelay = Config.StuckRespawnDelay or 3 -- jeda setelah stuck/respawn sebelum mulai memancing lagi
-Config.StuckCheckInterval = Config.StuckCheckInterval or 5
+Config.StuckRespawnDelay = Config.StuckRespawnDelay or 7 -- jeda setelah stuck/respawn sebelum mulai memancing lagi
+Config.StuckCheckInterval = Config.StuckCheckInterval or 3
 
 local FishingActive = false
 local MaxRetries = 5
@@ -1121,6 +1121,7 @@ function AutoFishingV1()
                     cycleSuccess = true
                     LastFishTime = tick()
                     CurrentRetries = 0
+                    task.wait(0.25)
                 end
 
                 task.wait(0.02)
