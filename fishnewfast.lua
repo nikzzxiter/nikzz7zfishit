@@ -1,5 +1,5 @@
 -- NIKZZ FISH IT - UPGRADED VERSION
--- DEVELOPER BY NIKZZ
+-- DEVELOPER BY NIKZZ ANJEQ
 -- Updated: 11 Oct 2025 - MAJOR UPDATE
 -- IMPROVED: Auto Enchant, Performance Mode, Auto Rejoin, Telegram Hooked
 
@@ -45,7 +45,7 @@ local Config = {
     InstantBait = true,
     AntiStuck = true,
     StuckCheckTime = 8,
-    RespawnDelay = 2
+    RespawnDelay = 2,
     PerfectCatch = false,
     AntiAFK = false,
     AutoJump = false,
