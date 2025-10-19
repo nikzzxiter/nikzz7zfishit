@@ -1,5 +1,5 @@
 -- NIKZZ FISH IT - UPGRADED VERSION
--- DEVELOPER BY NIKZZ
+-- DEVELOPER BY NIKZZ KINGGGG
 -- Updated: 11 Oct 2025 - MAJOR UPDATE
 -- IMPROVED: Auto Enchant, Performance Mode, Auto Rejoin, Telegram Hooked
 
@@ -1716,7 +1716,7 @@ local function CreateUI()
     })
     
     -- Cast Delay Slider
-    FishingTab:CreateSlider({
+    Tab1:CreateSlider({
         Name = "Cast Delay (Only V1)",
         Range = {0.1, 0.5},
         Increment = 0.05,
@@ -1802,7 +1802,7 @@ local function CreateUI()
     })
     
     -- Instant Bait Toggle
-    FishingTab:CreateToggle({
+    Tab1:CreateToggle({
         Name = "⚡ Instant Bait Detection",
         CurrentValue = Config.InstantBait,
         Callback = function(Value)
@@ -1811,7 +1811,7 @@ local function CreateUI()
     })
     
     -- Anti-Stuck Toggle
-    FishingTab:CreateToggle({
+    Tab1:CreateToggle({
         Name = "🛡️ Anti-Stuck System",
         CurrentValue = Config.AntiStuck,
         Callback = function(Value)
@@ -1872,7 +1872,7 @@ local function CreateUI()
     })
     
     -- Stuck Check Time Slider
-    FishingTab:CreateSlider({
+    Tab1:CreateSlider({
         Name = "⏰ Stuck Check Time",
         Range = {5, 15},
         Increment = 1,
@@ -1884,7 +1884,7 @@ local function CreateUI()
     })
     
     -- Respawn Delay Slider (NEW)
-    FishingTab:CreateSlider({
+    Tab1:CreateSlider({
         Name = "🔄 Respawn Delay",
         Range = {2, 5},
         Increment = 0.5,
@@ -1903,7 +1903,7 @@ local function CreateUI()
     Tab1:CreateSection("Preset Fishing")
     
     -- Ultra Fast Preset
-    FishingTab:CreateButton({
+    Tab1:CreateButton({
         Name = "⚡ ULTRA FAST PRESET",
         Callback = function()
             Config.FishingDelay = 0.3
@@ -1921,7 +1921,7 @@ local function CreateUI()
     })
     
     -- Balanced Preset
-    FishingTab:CreateButton({
+    Tab1:CreateButton({
         Name = "BALANCED PRESET",
         Callback = function()
             Config.FishingDelay = 0.5
@@ -1939,7 +1939,7 @@ local function CreateUI()
     })
     
     -- Safe Preset
-    FishingTab:CreateButton({
+    Tab1:CreateButton({
         Name = "SAFE PRESET",
         Callback = function()
             Config.FishingDelay = 1.5
