@@ -1,5 +1,5 @@
 -- NIKZZ FISH IT - UPGRADED VERSION
--- DEVELOPER BY NIKZZ
+-- DEVELOPER BY NIKZZ FAST
 -- Updated: 11 Oct 2025 - MAJOR UPDATE
 -- IMPROVED: Auto Enchant, Performance Mode, Auto Rejoin, Telegram Hooked
 
@@ -869,9 +869,22 @@ local function CheckAndRespawnIfStuck()
 end
 
 -- ===== AUTO FISHING V1 (COMPLETELY FIXED) =====
+-- Tambahkan/ubah beberapa Config sesuai kebutuhan:
+Config = Config or {}
+Config.AutoFishingV1 = Config.AutoFishingV1 or true
+Config.FishingDelay = Config.FishingDelay or 0.3           -- delay antara start dan finish (bisa dipercepat)
+Config.EquipWait = Config.EquipWait or 0.08              -- tunggu setelah equip agar tidak double action
+Config.CastGuardTime = Config.CastGuardTime or 0.25      -- waktu guard untuk mencegah double cast (detik)
+Config.StuckRespawnDelay = Config.StuckRespawnDelay or 3 -- jeda setelah stuck/respawn sebelum mulai memancing lagi
+Config.StuckCheckInterval = Config.StuckCheckInterval or 5
+
 local FishingActive = false
 local MaxRetries = 5
 local CurrentRetries = 0
+local LastFishTime = tick()
+local LastCastTime = 0            -- untuk mencegah double cast
+local SuppressFishingUntil = 0    -- waktu hingga tidak boleh mulai cycle (set saat respawn/stuck)
+local FishingSession = 0          -- session id untuk membatalkan loops lama
 
 local function ResetFishingState()
     FishingActive = false
@@ -880,96 +893,178 @@ local function ResetFishingState()
 end
 
 local function SafeRespawn()
+    -- menambah session sehingga thread lama berhenti
+    FishingSession = FishingSession + 1
+    local mySession = FishingSession
+
+    -- set jeda supaya tidak langsung start memancing kembali
+    SuppressFishingUntil = math.max(SuppressFishingUntil, tick() + Config.StuckRespawnDelay)
+
     task.spawn(function()
-        local currentPos = HumanoidRootPart.CFrame
-        
+        -- small guard: jika session berubah sebelum eksekusi, abort
+        if mySession ~= FishingSession then return end
+
         warn("[Anti-Stuck] Respawning to fix stuck state...")
-        
-        Character:BreakJoints()
-        
+        -- hentikan aktivitas sementara
+        FishingActive = false
+
+        -- simulasikan respawn / break joints
+        if Character and Character.Destroy then
+            pcall(function() Character:BreakJoints() end)
+        else
+            pcall(function() Character:BreakJoints() end)
+        end
+
+        -- tunggu karakter baru
         local newChar = LocalPlayer.CharacterAdded:Wait()
         task.wait(2)
-        
+
+        -- abort jika session berubah
+        if mySession ~= FishingSession then return end
+
         Character = newChar
         HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
         Humanoid = Character:WaitForChild("Humanoid")
-        
+
         task.wait(0.5)
-        HumanoidRootPart.CFrame = currentPos
-        
+        -- pindahkan posisi kembali ke posisi sebelum respawn jika perlu (opsional)
+        -- HumanoidRootPart.CFrame = currentPos -- hanya jika currentPos disimpan
+
         task.wait(1)
         ResetFishingState()
-        
-        if Config.AutoFishingV1 then
-            task.wait(0.5)
-            AutoFishingV1()
+
+        -- jangan langsung start — respect SuppressFishingUntil
+        if Config.AutoFishingV1 and mySession == FishingSession then
+            task.spawn(function()
+                -- tunggu sampai jeda respawn selesai (atau sampai user matikan)
+                while Config.AutoFishingV1 and tick() < SuppressFishingUntil do
+                    task.wait(0.1)
+                end
+                -- jika session masih valid dan auto on, restart
+                if Config.AutoFishingV1 and mySession == FishingSession then
+                    AutoFishingV1()
+                end
+            end)
         end
     end)
 end
 
 local function CheckStuckState()
     task.spawn(function()
-        while Config.AutoFishingV1 do
-            task.wait(StuckCheckInterval)
-            
+        local mySession = FishingSession
+        while Config.AutoFishingV1 and mySession == FishingSession do
+            task.wait(Config.StuckCheckInterval)
+            -- abort jika session berubah
+            if mySession ~= FishingSession then break end
+
             local timeSinceLastFish = tick() - LastFishTime
-            
-            if timeSinceLastFish > StuckCheckInterval and Config.AutoFishingV1 and FishingActive then
+            if timeSinceLastFish > Config.StuckCheckInterval and Config.AutoFishingV1 and FishingActive then
                 warn("[Anti-Stuck] Detected stuck state! Time since last fish: " .. math.floor(timeSinceLastFish) .. "s")
+                -- set jeda agar tidak spam memancing setelah respawn
+                SuppressFishingUntil = math.max(SuppressFishingUntil, tick() + Config.StuckRespawnDelay)
                 SafeRespawn()
+                break
             end
         end
     end)
 end
 
-local function AutoFishingV1()
+function AutoFishingV1()
+    -- increment session agar thread lama dibatalkan
+    FishingSession = FishingSession + 1
+    local mySession = FishingSession
+
     task.spawn(function()
-        print("[AutoFishingV1] Started - Ultra Fast Mode with Anti-Stuck")
+        print("[AutoFishingV1] Started - Ultra Fast Mode with Anti-Stuck (session "..tostring(mySession)..")")
         CheckStuckState()
-        
-        while Config.AutoFishingV1 do
+
+        while Config.AutoFishingV1 and mySession == FishingSession do
+            -- respect suppression window (mis. setelah respawn / stuck)
+            if tick() < SuppressFishingUntil then
+                -- tunggu sampai masa suppression berakhir
+                while tick() < SuppressFishingUntil and Config.AutoFishingV1 and mySession == FishingSession do
+                    task.wait(0.05)
+                end
+                -- double-check session
+                if mySession ~= FishingSession then break end
+            end
+
             FishingActive = true
             local cycleSuccess = false
-            
+
             local success, err = pcall(function()
+                -- if session changed, abort
+                if mySession ~= FishingSession then return end
+
                 -- Validate character
                 if not LocalPlayer.Character or not HumanoidRootPart then
-                    repeat task.wait(0.5) until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    repeat task.wait(0.1) until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
                     Character = LocalPlayer.Character
                     HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
                 end
 
-                -- Step 1: Equip tool
-                local equipSuccess = pcall(function()
-                    EquipTool:FireServer(1)
-                end)
-                
+                -- Step 1: Equip tool (safe equip + wait for tool to appear)
+                local equipSuccess = false
+                do
+                    local ok, _ = pcall(function()
+                        EquipTool:FireServer(1)
+                    end)
+                    if ok then
+                        -- tunggu sampai tool ada di character (timeout kecil)
+                        local timeout = tick() + 0.6
+                        while tick() < timeout and mySession == FishingSession do
+                            local hasTool = false
+                            if Character then
+                                for _,v in pairs(Character:GetChildren()) do
+                                    if v:IsA("Tool") then hasTool = true; break end
+                                end
+                            end
+                            if hasTool then
+                                equipSuccess = true
+                                break
+                            end
+                            task.wait(0.02)
+                        end
+                    end
+                end
+
                 if not equipSuccess then
                     CurrentRetries = CurrentRetries + 1
+                    warn("[AutoFishingV1] Equip failed or timeout")
                     if CurrentRetries >= MaxRetries then
-                        warn("[AutoFishingV1] Too many failures, respawning...")
+                        warn("[AutoFishingV1] Too many equip failures, respawning...")
                         SafeRespawn()
                         return
                     end
-                    task.wait(0.5)
+                    task.wait(0.1)
                     return
                 end
-                
-                task.wait(0.15)
+
+                -- small wait after equip to avoid duplicate action
+                task.wait(Config.EquipWait)
+
+                -- Guard terhadap double-cast:
+                if tick() - LastCastTime < Config.CastGuardTime then
+                    -- jika kast baru saja terjadi (mis. karena sync glitch), skip cycle sebentar
+                    warn("[AutoFishingV1] Skipping cycle due to recent cast (guard)")
+                    task.wait(0.05)
+                    return
+                end
 
                 -- Step 2: Charge rod
                 local chargeSuccess = false
                 for attempt = 1, 3 do
+                    if mySession ~= FishingSession then break end
                     local ok, result = pcall(function()
                         return ChargeRod:InvokeServer(tick())
                     end)
-                    if ok and result then 
-                        chargeSuccess = true 
-                        break 
+                    if ok and result then
+                        chargeSuccess = true
+                        break
                     end
-                    task.wait(0.1)
+                    task.wait(0.05)
                 end
-                
+
                 if not chargeSuccess then
                     warn("[AutoFishingV1] Charge failed after 3 attempts")
                     CurrentRetries = CurrentRetries + 1
@@ -977,25 +1072,28 @@ local function AutoFishingV1()
                         SafeRespawn()
                         return
                     end
-                    task.wait(0.5)
+                    task.wait(0.05)
                     return
                 end
 
-                task.wait(0.15)
+                task.wait(0.02)
 
-                -- Step 3: Start minigame with perfect values
+                -- Step 3: Start minigame with perfect values (cek session)
                 local startSuccess = false
                 for attempt = 1, 3 do
-                    local ok, result = pcall(function()
+                    if mySession ~= FishingSession then break end
+                    local ok = false
+                    local result = nil
+                    ok, result = pcall(function()
                         return StartMini:InvokeServer(-1.233184814453125, 0.9945034885633273)
                     end)
-                    if ok then 
-                        startSuccess = true 
-                        break 
+                    if ok then
+                        startSuccess = true
+                        break
                     end
-                    task.wait(0.1)
+                    task.wait(0.03)
                 end
-                
+
                 if not startSuccess then
                     warn("[AutoFishingV1] Start minigame failed after 3 attempts")
                     CurrentRetries = CurrentRetries + 1
@@ -1003,26 +1101,29 @@ local function AutoFishingV1()
                         SafeRespawn()
                         return
                     end
-                    task.wait(0.5)
+                    task.wait(0.05)
                     return
                 end
 
-                -- Step 4: Wait for fishing delay
-                local actualDelay = math.max(Config.FishingDelay, 0.3)
+                -- Mark last cast time (guard double cast)
+                LastCastTime = tick()
+
+                -- Step 4: Wait for fishing delay (bisa diatur lebih cepat)
+                local actualDelay = math.max(Config.FishingDelay or 0.3, 0.05)
                 task.wait(actualDelay)
 
                 -- Step 5: Finish fishing
                 local finishSuccess = pcall(function()
                     FinishFish:FireServer()
                 end)
-                
+
                 if finishSuccess then
                     cycleSuccess = true
                     LastFishTime = tick()
                     CurrentRetries = 0
                 end
-                
-                task.wait(0.2)
+
+                task.wait(0.02)
             end)
 
             if not success then
@@ -1031,18 +1132,21 @@ local function AutoFishingV1()
                 if CurrentRetries >= MaxRetries then
                     SafeRespawn()
                 end
-                task.wait(1)
+                task.wait(0.2)
             elseif cycleSuccess then
                 -- Successful cycle, minimal wait
-                task.wait(0.1)
+                task.wait(0.05)
             else
                 -- Failed cycle but no error
-                task.wait(0.5)
+                task.wait(0.1)
             end
         end
-        
-        ResetFishingState()
-        print("[AutoFishingV1] Stopped")
+
+        -- jika keluar loop, reset state hanya jika session masih sama
+        if mySession == FishingSession then
+            ResetFishingState()
+            print("[AutoFishingV1] Stopped (session "..tostring(mySession)..")")
+        end
     end)
 end
 
